@@ -207,9 +207,13 @@ let _ =
   let ocplint = Sys.argv.(1) in
   let parent = Sys.argv.(2) in
   let olint_dir = Filename.concat parent "_olint" in
-  (* Sys.remove (Filename.concat olint_dir "db"); *)
-  (* Unix.rmdir olint_dir; *)
-  (* Unix.mkdir olint_dir 0o755; *)
+
+    try
+      Unix.mkdir olint_dir 0o755
+    with _ -> ();
+  try
+    Sys.remove (Filename.concat olint_dir "db")
+  with _ -> ();
   Printf.printf "Running tests...\n%!";
   let test_dirs = find_directories parent in
 
