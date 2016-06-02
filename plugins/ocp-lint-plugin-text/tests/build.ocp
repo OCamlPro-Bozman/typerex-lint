@@ -1,0 +1,11 @@
+begin test "test-ocp-lint-plugin-text"
+    files = [ ]
+
+    test_byte = false
+    requires = [ "ocp-lint-testsuite" ]
+    test_args = [
+      "/home/cago/dev/ocaml-style-checker/_obuild/ocp-lint/ocp-lint.asm"
+        "%{sources}%"
+      ]
+
+end
