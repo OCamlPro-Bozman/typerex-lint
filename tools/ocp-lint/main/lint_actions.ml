@@ -179,36 +179,94 @@ let list_plugins fmt =
       Format.fprintf fmt "\n%!")
     Lint_globals.plugins
 
-let scan ?output_text print_only_new path =
-  (* We filter plugins by using the .ocplint config file and/or
-     command line arguments. *)
+let get_ignored_files pname cname =
+  let opt =
+    Lint_globals.Config.create_option [pname; cname; "ignored_files"]  "" "" 0
+      (SimpleConfig.list_option SimpleConfig.string_option)  [] in
+  !!opt
 
+let is_in_ignored_files file files =
+  List.exists (fun source -> source = file) files
+
+let from_input file pname cname inputs =
+  List.iter (fun input ->
+      try
+        match input with
+        | Lint_input.InMl main when is_source file ->
+          Lint_db.DefaultDB.add_entry file pname cname;
+          main file
+        | Lint_input.InStruct main when is_source file ->
+          begin match parse_source file with
+            | Some ast ->
+              Lint_db.DefaultDB.add_entry file pname cname;
+              main ast
+            | None -> assert false
+          end
+        | Lint_input.InMli main when is_interface file ->
+          Lint_db.DefaultDB.add_entry file pname cname;
+          main file
+        | Lint_input.InInterf main when is_interface file ->
+          begin match parse_interf file with
+            | Some ast ->
+              Lint_db.DefaultDB.add_entry file pname cname;
+              main ast
+            | None -> ()
+          end
+        | Lint_input.InCmt main when is_cmt file ->
+          Lint_db.DefaultDB.add_entry file pname cname;
+          main (Cmt_format.read_cmt file)
+        | Lint_input.InAll main ->
+          Lint_db.DefaultDB.add_entry file pname cname;
+          main [file]
+        | Lint_input.InTop main -> assert false (* TODO *)
+        | _ -> ()
+      with
+      | Lint_db_error.Db_error err ->
+        Lint_db_error.print Format.err_formatter err
+      | Sempatch.Failure.SempatchException e ->
+        Format.eprintf "Sempatch error : %s\n" (Sempatch.Failure.to_string e)
+      | Lint_plugin_error.Plugin_error err ->
+        Lint_plugin_error.print Format.err_formatter err
+      | exn ->
+        Format.eprintf "Error [%s] %s\n%!" file (Printexc.to_string exn)
+    )
+    inputs
+
+let lint_file file =
   let plugins = filter_plugins Lint_globals.plugins in
+  let open Lint_warning_decl in
+  let open Lint_warning_types in
+  Lint_plugin.iter_plugins (fun plugin checks ->
+      Lint_map.iter (fun cname lint ->
+          let module Plugin = (val plugin : Lint_plugin_types.PLUGIN) in
+          let module Linter = (val lint : Lint_types.LINT) in
+          let ignored_files = get_ignored_files Plugin.short_name cname in
+          if not (is_in_ignored_files file ignored_files) then
+            from_input file Plugin.short_name Linter.short_name Linter.inputs)
+        checks)
+    plugins;
+  Lint_text.print Format.err_formatter "/" Lint_db.DefaultDB.db;
+  Lint_text.summary Lint_db.DefaultDB.db
 
+
+let fork_exec file =
+  let exe = Sys.executable_name in
+  let args = [| exe; "--file"; file |] in
+  let pid = Unix.create_process exe args Unix.stdin Unix.stdout Unix.stderr in
+  match pid with
+  | 0 ->
+    flush stdout;
+    flush stderr
+  | n ->
+    flush stdout;
+    flush stderr
+
+let lint_sequential path =
   (* We filter the global ignored modules/files.  *)
-  let all = filter_modules (scan_project path) !!ignored_files in
+  let sources = filter_modules (scan_project path) !!ignored_files in
+  List.iter lint_file sources
 
-  (* All inputs for each analyze *)
-  let mls = List.filter is_source all in
-  let mlis = List.filter is_interface all in
-
-  let cmts =
-    let files = List.filter is_cmt all in
-    List.map (fun file -> file, lazy (Cmt_format.read_cmt file)) files in
-
-  let asts_ml, asts_mli =
-    List.map (fun file -> file, lazy (parse_source file)) mls,
-    List.map (fun file -> file, lazy (parse_interf file)) mlis in
-
-  Format.printf "Starting analyses...\n%!";
-
-  Lint_parallel_loop.lint all mls mlis asts_ml asts_mli cmts plugins;
-
-  Format.printf "Printing results...\n%!";
-
-  Lint_text.summary path Lint_db.DefaultDB.db;
-  (* TODO: do we want to print in stderr by default ? *)
-  begin match output_text with
-    | None -> print path print_only_new
-    | Some file -> to_text path file
-  end
+let lint_parallel path =
+  (* We filter the global ignored modules/files.  *)
+  let sources = filter_modules (scan_project path) !!ignored_files in
+  List.iter fork_exec sources

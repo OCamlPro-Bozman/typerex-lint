@@ -23,7 +23,8 @@ type action =
 | ActionList
 | ActionInit
 | ActionSave
-| ActionLoad of string
+| ActionLoadDir of string
+| ActionLoadFile of string
 
 let action = ref ActionNone
 let exit_status = ref 0
@@ -56,22 +57,25 @@ let add_spec ((cmd, _, _) as spec) =
 let () =
   specs := [
     "--init", Arg.Unit (fun dir -> set_action ActionInit),
-    " Init a project";
+    " Initialise a project";
 
     "--path", Arg.String (fun dir ->
         Lint_actions.init_config dir;
-        set_action (ActionLoad dir)),
+        set_action (ActionLoadDir dir)),
     "DIR   Give a project dir path";
 
-    "--output-txt", Arg.String (fun file -> output_text := Some file),
-    "FILE   Output results in a text file.";
+    "--file", Arg.String (fun file ->
+        set_action (ActionLoadFile file)),
+    "FILE   Give a file to lint";
 
     "--list", Arg.Unit (fun () -> set_action ActionList),
-    " List of every plugins and warnings.";
+    " List of every plugins and linters.";
 
-    "--warn-error", Arg.Unit (fun () ->
-        exit_status := 1),
+    "--warn-error", Arg.Unit (fun () -> exit_status := 1),
     " Every warning returns an error status code.";
+
+    "--save-config", Arg.Unit (fun () -> set_action (ActionSave)),
+    " Save a .ocplint current configuration file.";
 
     "--load-plugins", Arg.String (fun files ->
         let l = (Str.split (Str.regexp ",") files) in
@@ -79,22 +83,26 @@ let () =
         List.iter add_spec (Lint_globals.Config.simple_args ())),
     "PLUGINS Load dynamically plugins with their corresponding 'cmxs' files.";
 
-    "--save-config", Arg.Unit (fun () -> set_action (ActionSave)),
-    " Save ocp-lint default config file.";
-
     "--no-db-cache", Arg.Set no_db,
-    " Ignore the DB file.";
+    " Ignore the database.";
 
+    (* Handle options to output results. *)
+    "--output-txt", Arg.String (fun file -> output_text := Some file),
+    "FILE   Output results in a text file.";
+
+    (* Just during the dev *)
     "--print-only-new", Arg.Unit (fun () -> print_only_new := true),
     " Print only new warnings.";
   ]
 
+let start_lint_file file =
+  Lint_actions.init_db !no_db file;
+  Lint_actions.lint_file file
+  (* TODO: cago: save_db file ....*)
+
 let start_lint dir =
   Lint_actions.init_db !no_db dir;
-  Lint_actions.scan
-    ?output_text:!output_text
-    !print_only_new
-    dir;
+  Lint_actions.lint_parallel dir;
   if not !no_db then Lint_db.DefaultDB.save ();
   if Lint_db.DefaultDB.has_warning () then exit !exit_status
 
@@ -109,9 +117,12 @@ let main () =
     usage_msg;
 
   match !action with
-  | ActionLoad dir ->
+  | ActionLoadDir dir ->
     start_lint dir;
     exit 0 (* No warning, we can exit successfully *)
+  | ActionLoadFile file ->
+    start_lint_file file;
+    exit 0
   | ActionList ->
     Lint_actions.list_plugins Format.std_formatter;
     exit 0

@@ -36,7 +36,7 @@ let check_flag options =
       (Lint_globals.Config.get_option_value options)
   with Not_found -> true
 
-let summary path db =
+let summary ?(path="/") db =
   let files_linted = ref StringCompat.StringSet.empty in
   let breakdown = Hashtbl.create 42 in
   Hashtbl.iter (fun file (hash, pres) ->
